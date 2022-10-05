@@ -83,7 +83,6 @@ class Game:
                 db.session.commit()
 
     def leave_game(self, data, request):
-        print("leave_game")
         player = db.session.query(Players).filter_by(sid=request.sid).first()
         if player is not None:
             player.connected = False
@@ -191,30 +190,18 @@ class Game:
             # roll["dice_2"] = 3
             player.game.dice_1 = roll["dice_1"]
             player.game.dice_2 = roll["dice_2"]
-            playable_numbers = [player.game.dice_1, player.game.dice_2, player.game.dice_1 + player.game.dice_2]
-            print(playable_numbers)
+
             can_play = False
             player.game.roll_lock = True
-            for num in playable_numbers:
-                try:
-                    state = (eval(f"player.game.number_{num}"))
-                    if not state:
-                        can_play = True
-                except AttributeError:
-                    pass
-            print(can_play)
-            if not can_play:
-                player.game.end_turn = True
-            else:
-                if (eval(f"player.game.number_{playable_numbers[0]}") or eval(
-                        f"player.game.number_{playable_numbers[1]}")):
-                    player.game.end_turn = True
+            legal_small, legal_combined = self.get_legal_numbers(player.game)
 
-            try:
-                if eval(f"player.game.number_{playable_numbers[2]}") and (roll["dice_1"] + roll["dice_2"] ==
-                                                                          playable_numbers[2]):
-                    player.game.end_turn = True
-            except AttributeError:
+            if legal_combined is not None:
+                can_play = True
+
+            if len(legal_small) != 0:
+                can_play = True
+
+            if not can_play:
                 player.game.end_turn = True
 
             db.session.commit()
@@ -252,6 +239,7 @@ class Game:
 
     def game_over(self, game):
         game.game_over = True
+        game.players_turn = ""
         db.session.commit()
 
         players_data = self.get_players_data(game.players)
@@ -259,64 +247,81 @@ class Game:
 
         self.send_all_players(game, "game_over", {"players": players_data})
 
+    def get_legal_numbers(self, game):
+        numbers = [game.number_1, game.number_2, game.number_3, game.number_4,
+                   game.number_5, game.number_6, game.number_7, game.number_8,
+                   game.number_9]
+        legal_small = []
+        legal_combined = None
+
+        if not game.select_strategy_small:
+            if game.dice_1 != game.dice_2:
+                if not (numbers[game.dice_1 - 1] or numbers[game.dice_2 - 1]):
+                    legal_small.append(game.dice_1)
+
+                    legal_small.append(game.dice_2)
+
+            if game.dice_1 + game.dice_2 < 10:
+                legal_combined = game.dice_1 + game.dice_2
+                if numbers[legal_combined - 1]:
+                    legal_combined = None
+        else:
+            if not numbers[game.dice_1 - 1]:
+                legal_small.append(game.dice_1)
+
+            if not numbers[game.dice_2 - 1]:
+                legal_small.append(game.dice_2)
+
+        return legal_small, legal_combined
+
     def number_clicked(self, data, request):
         player = db.session.query(Players).filter_by(sid=request.sid).first()
         num_map = {"1": "number_1", "2": "number_2", "3": "number_3", "4": "number_4", "5": "number_5", "6": "number_6",
                    "7": "number_7", "8": "number_8", "9": "number_9"}
+        numbers = [player.game.number_1, player.game.number_2, player.game.number_3, player.game.number_4,
+                   player.game.number_5, player.game.number_6, player.game.number_7, player.game.number_8,
+                   player.game.number_9]
         # Map is a security measure
         if not player.game.end_turn:
             if player.id == player.game.players_turn:
                 if player.game.roll_lock:
-                    playable_numbers = [player.game.dice_1, player.game.dice_2, player.game.dice_1 + player.game.dice_2]
-                    if int(data["number"]) in playable_numbers:
-                        try:
-                            num = num_map[str(data["number"])]
-                            state = (eval(f"player.game.{num}"))
-                            if not state:
-                                if not player.game.select_strategy_small:
-                                    if eval(f"player.game.number_{playable_numbers[0]}") is True or eval(
-                                            f"player.game.number_{playable_numbers[1]}") is True:
-                                        print("Cant use small strategy must use combined")
+                    legal_small, legal_combined = self.get_legal_numbers(player.game)
+                    picked_num = int(data["number"])
+                    print(picked_num)
+                    if picked_num in legal_small:
+                        if not player.game.select_strategy_small:
+                            exec(f"player.game.number_{picked_num}=True")
+                            numbers[picked_num - 1] = True
+                            player.game.select_strategy_small = True
+                            player.score += picked_num
 
-                                    if data["number"] == playable_numbers[2]:
-                                        exec(f"player.game.{num}=True")
-                                        player.game.roll_lock = False
-                                        player.score += data["number"]
-                                    else:
-                                        print("Turning on Small strat")
-                                        player.game.select_strategy_small = True
-                                        player.game.roll_lock = False
-                                        exec(f"player.game.{num}=True")
-                                        player.score += data["number"]
+                        else:
+                            exec(f"player.game.number_{picked_num}=True")
+                            player.game.select_strategy_small = False
+                            player.game.roll_lock = False
+                            player.score += picked_num
+                    elif legal_combined == picked_num:
+                        exec(f"player.game.number_{picked_num}=True")
+                        player.game.roll_lock = False
+                        player.score += picked_num
 
-                                else:
-                                    print("Using the small strat")
-                                    if playable_numbers[2] == data["number"]:
-                                        print("cant use combined on small strat")
-                                    else:
-                                        print("Using small strat")
-                                        exec(f"player.game.{num}=True")
-                                        player.game.roll_lock = False
-                                        player.game.select_strategy_small = False
-                                        player.score += data["number"]
+                    db.session.commit()
 
-                                db.session.commit()
-                                self.send_all_board_info(player.game)
-                                self.send_all_players_info(player.game)
-                        except KeyError:
-                            print("Bad Number String")
+                    game = db.session.query(Games).filter_by(code=player.game_code).first()
+                    if (game.number_1 is True) and (game.number_2 is True) and (
+                            game.number_3 is True) and (game.number_4 is True) and (
+                            game.number_5 is True) and (game.number_6 is True) and (
+                            game.number_7 is True) and (game.number_8 is True) and (
+                            game.number_9 is True):
+                        print("THE BOX HAS BEEN SHUT")
 
-                        if (player.game.number_1 is True) and (player.game.number_2 is True) and (
-                                player.game.number_3 is True) and (player.game.number_4 is True) and (
-                                player.game.number_5 is True) and (player.game.number_6 is True) and (
-                                player.game.number_7 is True) and (player.game.number_8 is True) and (
-                                player.game.number_9 is True):
-                            print("THE BOX HAS BEEN SHUT")
+                        self.clear_board(game)
 
-                            self.clear_board(player.game)
+                    self.send_all_board_info(player.game)
+                    self.send_all_players_info(player.game)
 
-                    else:
-                        print("Number Not Valid")
+                    print(legal_small, legal_combined)
+
                 else:
                     print("Need to roll first")
             else:
