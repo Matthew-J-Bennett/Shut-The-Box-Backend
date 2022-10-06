@@ -44,49 +44,68 @@ class Game:
             game = db.session.query(Games).filter_by(code=data["game-code"]).first()
             if game is not None:
                 players = db.session.query(Players).filter_by(game_code=game.code, user_id=user.id).first()
-                if players is None:
-                    if not game.started:
-                        existing_players = db.session.query(Players).filter_by(game_code=game.code).all()
-                        num = len(existing_players) + 1
-                        if num is None:
-                            num = 1
-                        player = Players(id=str(uuid.uuid4())[:5], game_code=game.code, user_id=user.id, connected=True,
-                                         sid=request.sid, player_number=num)
+                if not game.game_over:
+                    if players is None:
+                        if not game.started:
+                            existing_players = db.session.query(Players).filter_by(game_code=game.code).all()
+                            num = len(existing_players) + 1
+                            if num is None:
+                                num = 1
+                            player = Players(id=str(uuid.uuid4())[:5], game_code=game.code, user_id=user.id,
+                                             connected=True,
+                                             sid=request.sid, player_number=num)
 
-                        if num == 1:
-                            print(player.id)
-                            game.players_turn = player.id
-                        db.session.add(player)
+                            if num == 1:
+                                print(player.id)
+                                game.players_turn = player.id
+                            db.session.add(player)
+                            db.session.commit()
+                            self.emit("join_response", {"success": True, "player_id": player.id}, player.sid)
+
+                            self.send_player_game_info(game, player)
+                            self.send_all_players_info(game)
+                        else:
+                            self.emit("join_response", {"success": False, "game_exist": False, "isSignedIn": True},
+                                      request.sid)
+                    else:
+                        players.connected = True
+                        players.sid = request.sid
                         db.session.commit()
-                        self.emit("join_response", {"success": True, "player_id": player.id}, player.sid)
-
-                        self.send_player_game_info(game, player)
+                        self.emit("join_response", {"success": True, "player_id": players.id}, players.sid)
+                        self.send_player_game_info(game, players)
                         self.send_all_players_info(game)
-                elif players.connected is False:
-                    players.connected = True
-                    players.sid = request.sid
-                    db.session.commit()
-                    self.emit("join_response", {"success": True, "player_id": players.id}, players.sid)
-                    self.send_player_game_info(game, players)
-                    self.send_all_players_info(game)
+                else:
+                    self.emit("join_response", {"success": False, "game_exist": False, "isSignedIn": True},
+                              request.sid)
+
             else:
                 print("No game")
                 self.emit("join_response", {"success": False, "game_exist": False, "isSignedIn": True}, request.sid)
         else:
             print("Invalid Auth Key")
+            self.emit("join_response", {"success": False, "game_exist": False, "isSignedIn": False}, request.sid)
 
-    def disconnect(self, sid):
-        player = db.session.query(Players).filter_by(sid=sid).first()
-        if player is not None:
-            if player.connected:
-                player.connected = False
-                db.session.commit()
+    def disconnect(self, request):
+        self.leave_game(data=None, request=request)
 
     def leave_game(self, data, request):
         player = db.session.query(Players).filter_by(sid=request.sid).first()
         if player is not None:
-            player.connected = False
-            db.session.commit()
+            game_code = player.game_code
+            if player.game.game_over:
+                db.session.delete(player)
+                db.session.commit()
+
+                players = db.session.query(Players).filter_by(game_code=game_code).first()
+                print(players)
+                if players is None:
+                    game = db.session.query(Games).filter_by(code=game_code).first()
+                    db.session.delete(game)
+                    db.session.commit()
+
+            else:
+                player.connected = False
+                db.session.commit()
 
             # delete_able = True
             # for p in player.game.players:
@@ -175,38 +194,41 @@ class Game:
 
     def start_game(self, data, request):
         player = db.session.query(Players).filter_by(sid=request.sid).first()
-        if player.id == player.game.players_turn:
-            player.game.started = True
-            db.session.commit()
+        if not player.game.game_over:
+            if player.id == player.game.players_turn:
+                player.game.started = True
+                db.session.commit()
 
-            self.send_all_board_info(player.game)
-            self.send_all_players(player.game, "status_message", {"message": f"{player.user.name}'s Turn"})
+                self.send_all_board_info(player.game)
+                self.send_all_players(player.game, "status_message", {"message": f"{player.user.name}'s Turn"})
 
     def roll(self, data, request):
         player = db.session.query(Players).filter_by(sid=request.sid).first()
-        if not player.game.roll_lock:
-            roll = {"dice_1": random.randint(1, 6), "dice_2": random.randint(1, 6), "roll_wait": random.randrange(1, 3)}
-            # roll["dice_1"] = 3
-            # roll["dice_2"] = 3
-            player.game.dice_1 = roll["dice_1"]
-            player.game.dice_2 = roll["dice_2"]
+        if not player.game.game_over:
+            if not player.game.roll_lock:
+                roll = {"dice_1": random.randint(1, 6), "dice_2": random.randint(1, 6),
+                        "roll_wait": random.randrange(1, 3)}
+                # roll["dice_1"] = 3
+                # roll["dice_2"] = 3
+                player.game.dice_1 = roll["dice_1"]
+                player.game.dice_2 = roll["dice_2"]
 
-            can_play = False
-            player.game.roll_lock = True
-            legal_small, legal_combined = self.get_legal_numbers(player.game)
+                can_play = False
+                player.game.roll_lock = True
+                legal_small, legal_combined = self.get_legal_numbers(player.game)
 
-            if legal_combined is not None:
-                can_play = True
+                if legal_combined is not None:
+                    can_play = True
 
-            if len(legal_small) != 0:
-                can_play = True
+                if len(legal_small) != 0:
+                    can_play = True
 
-            if not can_play:
-                player.game.end_turn = True
+                if not can_play:
+                    player.game.end_turn = True
 
-            db.session.commit()
-            self.send_all_players(player.game, "rolled", roll)
-            self.send_all_board_info(player.game)
+                db.session.commit()
+                self.send_all_players(player.game, "rolled", roll)
+                self.send_all_board_info(player.game)
 
     def end_turn(self, data, request):
         player = db.session.query(Players).filter_by(sid=request.sid).first()
@@ -239,7 +261,7 @@ class Game:
 
     def game_over(self, game):
         game.game_over = True
-        game.players_turn = ""
+        # game.players_turn = ""
         db.session.commit()
 
         players_data = self.get_players_data(game.players)
@@ -282,50 +304,51 @@ class Game:
                    player.game.number_5, player.game.number_6, player.game.number_7, player.game.number_8,
                    player.game.number_9]
         # Map is a security measure
-        if not player.game.end_turn:
-            if player.id == player.game.players_turn:
-                if player.game.roll_lock:
-                    legal_small, legal_combined = self.get_legal_numbers(player.game)
-                    picked_num = int(data["number"])
-                    print(picked_num)
-                    if picked_num in legal_small:
-                        if not player.game.select_strategy_small:
-                            exec(f"player.game.number_{picked_num}=True")
-                            numbers[picked_num - 1] = True
-                            player.game.select_strategy_small = True
-                            player.score += picked_num
+        if not player.game.game_over:
+            if not player.game.end_turn:
+                if player.id == player.game.players_turn:
+                    if player.game.roll_lock:
+                        legal_small, legal_combined = self.get_legal_numbers(player.game)
+                        picked_num = int(data["number"])
+                        print(picked_num)
+                        if picked_num in legal_small:
+                            if not player.game.select_strategy_small:
+                                exec(f"player.game.number_{picked_num}=True")
+                                numbers[picked_num - 1] = True
+                                player.game.select_strategy_small = True
+                                player.score += picked_num
 
-                        else:
+                            else:
+                                exec(f"player.game.number_{picked_num}=True")
+                                player.game.select_strategy_small = False
+                                player.game.roll_lock = False
+                                player.score += picked_num
+                        elif legal_combined == picked_num:
                             exec(f"player.game.number_{picked_num}=True")
-                            player.game.select_strategy_small = False
                             player.game.roll_lock = False
                             player.score += picked_num
-                    elif legal_combined == picked_num:
-                        exec(f"player.game.number_{picked_num}=True")
-                        player.game.roll_lock = False
-                        player.score += picked_num
 
-                    db.session.commit()
+                        db.session.commit()
 
-                    game = db.session.query(Games).filter_by(code=player.game_code).first()
-                    if (game.number_1 is True) and (game.number_2 is True) and (
-                            game.number_3 is True) and (game.number_4 is True) and (
-                            game.number_5 is True) and (game.number_6 is True) and (
-                            game.number_7 is True) and (game.number_8 is True) and (
-                            game.number_9 is True):
-                        print("THE BOX HAS BEEN SHUT")
+                        game = db.session.query(Games).filter_by(code=player.game_code).first()
+                        if (game.number_1 is True) and (game.number_2 is True) and (
+                                game.number_3 is True) and (game.number_4 is True) and (
+                                game.number_5 is True) and (game.number_6 is True) and (
+                                game.number_7 is True) and (game.number_8 is True) and (
+                                game.number_9 is True):
+                            print("THE BOX HAS BEEN SHUT")
 
-                        self.clear_board(game)
+                            self.clear_board(game)
 
-                    self.send_all_board_info(player.game)
-                    self.send_all_players_info(player.game)
+                        self.send_all_board_info(player.game)
+                        self.send_all_players_info(player.game)
 
-                    print(legal_small, legal_combined)
+                        print(legal_small, legal_combined)
 
+                    else:
+                        print("Need to roll first")
                 else:
-                    print("Need to roll first")
+                    print("Wrong Player")
             else:
-                print("Wrong Player")
-        else:
 
-            print("You Turn Needs to End First")
+                print("You Turn Needs to End First")

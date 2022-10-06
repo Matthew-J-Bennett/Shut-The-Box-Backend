@@ -156,7 +156,7 @@ def game_event(data):
 
 @socketio.on('disconnect')
 def disconnect():
-    gameHandler.disconnect(request.sid)
+    gameHandler.disconnect(request)
 
 
 if __name__ == '__main__':
