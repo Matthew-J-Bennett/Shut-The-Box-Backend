@@ -5,15 +5,6 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
 from sqlalchemy.orm import relationship
 
-# engine = db.create_engine(
-#     'postgresql://ludo-data:AVNS_2aKu1NDGxy8BOWM@app-d8f7f2f5-dd0d-4866-8e77-e575ac19c394-do-user-2643973-0.b.db.ondigitalocean.com:25060/ludo-data')
-#
-# Base = declarative_base()
-#
-# Session = sessionmaker(bind=engine)
-#
-# session = Session()
-
 db = SQLAlchemy()
 
 

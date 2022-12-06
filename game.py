@@ -107,21 +107,6 @@ class Game:
                 player.connected = False
                 db.session.commit()
 
-            # delete_able = True
-            # for p in player.game.players:
-            #     if p.connected:
-            #         delete_able = False
-            #
-            # if delete_able:
-            #     for p in player.game.players:
-            #         db.session.delete(p)
-            #
-            #     game = db.session.query(Games).filter_by(code=data["game-code"]).first()
-            #
-            #     db.session.delete(game)
-            #
-            #     db.session.commit()
-
     def get_players_data(self, players):
         player_info = []
         colour_index = 0
